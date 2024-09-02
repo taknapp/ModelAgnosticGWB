@@ -2,7 +2,9 @@
 
 ## Scripts
 popstock_tsf_helper.py - helper functions to run the other 2 notebooks
+
 popstock_tsf_notebook.ipynb - popstock sampler notebook for R(z) tsf fitting
+
 tsf_fitter_notebook.ipynb - tsf notebook for general sampler with realistic detector noise
 
 ## Figures
