@@ -10,13 +10,14 @@ from gwpopulation.models.redshift import MadauDickinsonRedshift
 from spline_redshift import createSplineRedshift
 import pickle
 import cloudpickle
+from pathlib import Path
 
 import json
 
 
 from popstock_tsf_helper import (create_injected_OmegaGW,
                                  get_sigma_from_noise_curves,
-                                 create_popOmegaGW
+                                 create_popOmegaGW)
 import transdimensional_spline_fitting as tsf
 from tsf_models import RedshiftSampler
 import argparse
@@ -116,6 +117,7 @@ def main(args):
                                 start_config=np.ones(args.max_num_knots).astype(bool),
                                 proposal_weights=[1, 1, 0, 1, 1])
 
+    # save this stuff to keep around for later
     results.max_num_knots = args.max_num_knots
     results.num_waveforms = args.num_waveforms
     results.data_object = data_object
@@ -128,6 +130,10 @@ def main(args):
     results.mass_obj = mass_obj
 
     # save pickled results
+    outdir = Path(args.output_directory)
+    outdir.mkdir(exist_ok=True, parents=True)
+    outfile = outdir.joinpath(f"{args.run_name}_results.pkl")
+
     with open("test_results.pkl", "wb") as myf:
         cloudpickle.dump(results, myf)
 
@@ -143,6 +149,10 @@ if __name__=="__main__":
                         help='number of mcmc samples for rj fitting')
     parser.add_argument("--max-num-knots", type=int, default=40,
                         help='max number of knots for interpolation fitting')
+    parser.add_argument("--output-directory", type=str, default='./',
+                        help='output directory for results')
+    parser.add_argument("--run-name", type=str, default="test_run",
+                        help='name of the run, used to create output files')
 
 
     args = parser.parse_args()
