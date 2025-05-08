@@ -11,7 +11,7 @@ class BaseSplineModel(object):
     def __init__(self, data, N_possible_knots, xrange,
                  height_prior_range, interp_type='linear', log_output=False,
                  log_space_xvals=False, birth_uniform_frac=0.5,
-                 min_knots=2, birth_gauss_scalefac=1):
+                 min_knots=2, birth_gauss_scalefac=.2):
         """
         Params:
         ------
@@ -191,7 +191,7 @@ class BaseSplineModel(object):
         idx_to_change = np.random.choice(np.where(self.configuration)[0])
 
         # draw a "scale" factor between 1/10 and 1/3 of prior range
-        scalefac = (self.yhigh - self.ylow) * (np.random.rand() * (1/10 - 1/100) + 1/100)
+        scalefac = (self.yhigh - self.ylow) * (np.random.rand() * (1/3 - 1/10) + 1/10)
 
         # propose to jump an amount given by zero-mean Gaussian with standard
         # deviation given by scalefac above
