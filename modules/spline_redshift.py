@@ -2,8 +2,33 @@
 #
 import gwpopulation
 import numpy as np
-from scipy.interpolate import interp1d, Akima1DInterpolator
 
+from gwpopulation.utils import xp
+from scipy.interpolate import interp1d, Akima1DInterpolator
+from interpax import interp1d as interpax_interp1d
+import jax
+import jax.numpy as jnp
+from gwpopulation.experimental.cosmo_models import CosmoMixin
+from functools import lru_cache
+
+
+
+
+def propagate_last_selected(x, a, mask):
+
+    first_idx = jnp.argmax(mask)
+    def step(carry, inputs):
+        x_carry, a_carry = carry
+        x_i, a_i, m_i = inputs
+        new_x = jnp.where(m_i, x_i, x_carry)
+        new_a = jnp.where(m_i, a_i, a_carry)
+        return (new_x, new_a), (new_x, new_a)
+    
+    init = (x[first_idx], a[first_idx])
+    _, (out_x, out_a) = jax.lax.scan(step, init, xs=(x, a, mask))
+    return out_x, out_a
+
+jplsn = jax.jit(propagate_last_selected)
 
 
 class SplineRedshift(gwpopulation.models.redshift._Redshift):
@@ -61,21 +86,37 @@ def createSplineRedshift(max_knots=10):
         variable_names = [f"amplitudes{ii}" for ii in range(max_knots)] + \
             [f"configuration{ii}" for ii in range(max_knots)] + \
             [f"xvals{ii}" for ii in range(max_knots)]
-
+        
+        def __init__(self, *args, **kwargs):
+            if 'backend' in kwargs:
+                be = kwargs.pop('backend')
+            super().__init__(*args, **kwargs)
+            self.backend = be
+            
         def psi_of_z(self, redshift, **parameters):
-            amplitudes = np.array([parameters[key] for key in parameters if 'amplitude' in key])
-            configuration = np.array([parameters[key] for key in parameters if 'configuration' in key])
-            xvals = np.array([parameters[key] for key in parameters if 'xval' in key])
-            if np.sum(configuration)==0:
-                tmp = 0 * np.zeros(redshift.size)
-            elif np.sum(configuration)==1:
-                tmp = np.ones(redshift.size) * amplitudes[configuration]
+            amplitudes = xp.array([parameters[f'amplitudes{ii}'] for ii in range(max_knots)])
+            configuration = xp.array([parameters[f'configuration{ii}'] for ii in range(max_knots)])
+            xvals = xp.array([parameters[f'xvals{ii}'] for ii in range(max_knots)])
+
+            if self.backend=='numpy':
+                if np.sum(configuration)==0:
+                    tmp = 0 * xp.zeros(redshift.size)
+                elif np.sum(configuration)==1:
+                    tmp = xp.ones(redshift.size) * amplitudes[configuration]
+                else:
+                    tmp = interp1d(xvals[configuration],
+                                   amplitudes[configuration],
+                                   fill_value="extrapolate")(redshift)
+
+            elif self.backend=='jax':
+                # configuration = configuration.at[0].set(1.)
+                # configuration = configuration.at[-1].set(1.)
+                xvals_new, amplitudes_new = jplsn(xvals, amplitudes, configuration)
+                tmp = interpax_interp1d(redshift, xvals_new,
+                               amplitudes_new,
+                               extrap=True, method='linear')
             else:
-                tmp = interp1d(xvals[configuration],
-                               amplitudes[configuration],
-                               fill_value="extrapolate")(redshift)
-                # tmp = Akima1DInterpolator(xvals[configuration],
-                #                           amplitudes[configuration])(redshift,
-                #                                                 extrapolate=True)
+                print('gwpop backend', gwpopulation.backend)
+                raise ValueError("Backend must be set to numpy or jax")
             return tmp
     return SplineRedshift
