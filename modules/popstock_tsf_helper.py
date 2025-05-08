@@ -30,6 +30,9 @@ import transdimensional_spline_fitting as tsf
 
 from popstock.PopulationOmegaGW import PopulationOmegaGW
 
+import lal
+lal.swig_redirect_standard_output_error(False)
+
 
 def get_sigma_from_noise_curves(detector_names, freqs, obs_T):
     """
@@ -188,22 +191,22 @@ def plot_posterior_fits(fit_omega, fit_results_omega, freqs, N_samples, offset=0
         plt.plot(freqs, 10**fit_omega.evaluate_interp_model(np.log10(fit_omega.data.data_xvals), fit_results_omega.heights[idx+offset], fit_results_omega.configurations[idx+offset].astype(bool), np.log10(fit_results_omega.knots[idx+offset])), alpha=0.01, c='k')
     return
 
-def create_popOmegaGW(freqs, mass_obj, redshift_obj):
+def create_popOmegaGW(freqs, mass_obj, redshift_obj, backend='numpy'):
     """
     Create population OmegaGW model from a gwpopulations mass object and
     redshift object."""
     # choose models for calculating Omega_GW
     models = {'mass_model' : mass_obj,'redshift_model' : redshift_obj,}
     # Populations object requires mass and redshift distributions and frequencies
-    pop_obj = PopulationOmegaGW(models=models, frequency_array=freqs)
+    pop_obj = PopulationOmegaGW(models=models, frequency_array=freqs, backend=backend)
     return pop_obj
 
-def create_injected_OmegaGW(freqs, Lambda_0, N_proposal_samples, mass_obj, redshift_obj):
+def create_injected_OmegaGW(freqs, Lambda_0, N_proposal_samples, mass_obj, redshift_obj, max_knots=10, backend='numpy'):
     """
     Create an injected Omega_GW
     """
     # create population object
-    injection_pop = create_popOmegaGW(freqs, mass_obj, redshift_obj)
+    injection_pop = create_popOmegaGW(freqs, mass_obj, redshift_obj, backend=backend)
 
     # We need to define Λ_0 hyperparameters for population (must match formalism in the redshift and mass models) and number of desired samples
     injection_pop.draw_and_set_proposal_samples(Lambda_0, N_proposal_samples=N_proposal_samples)
@@ -217,19 +220,19 @@ def create_injected_OmegaGW(freqs, Lambda_0, N_proposal_samples, mass_obj, redsh
     # additional arguments needed to pass into sampling to use the spline redshift model
     args = np.argsort(injection_pop.proposal_samples['redshift'])
 
-    # these can be our starting knots
-    xvals = injection_pop.proposal_samples['redshift'][args][::100]
+
+    xvals = np.linspace(min(injection_pop.proposal_samples['redshift']), max(injection_pop.proposal_samples['redshift']), num=max_knots)
     # these can be our starting amplitudes
-    amplitudes = injection_pop.models['redshift'].psi_of_z(injection_pop.proposal_samples['redshift'], **Lambda_0)[args][::100]
+    amplitudes = np.interp(xvals, injection_pop.proposal_samples['redshift'][args], injection_pop.models['redshift'].psi_of_z(injection_pop.proposal_samples['redshift'], **Lambda_0)[args])
     # we'll start with all knots turned on
     configuration = np.ones(amplitudes.size, dtype=bool)
 
     # Keep the mass model the same, redshift model becomes the spline redshift
-    splredshift = createSplineRedshift(amplitudes.size)(z_max=10)
+    splredshift = createSplineRedshift(amplitudes.size)(z_max=10, backend=injection_pop.backend)
     models = {'mass_model' : mass_obj,'redshift_model' : splredshift}
 
     # instantiate population object using the spline redshift model
-    pop_for_sampling = PopulationOmegaGW(models=models, frequency_array=freqs, backend='numpy')
+    pop_for_sampling = PopulationOmegaGW(models=models, frequency_array=freqs, backend=backend)
 
     # define the hyperparameters (need additional ones to Λ to match additional parameters needed for the spline redshift model)
     params_start = {**{f'amplitudes{ii}': amplitudes[ii] for ii in range(amplitudes.size)},
@@ -240,7 +243,7 @@ def create_injected_OmegaGW(freqs, Lambda_0, N_proposal_samples, mass_obj, redsh
     Lambda_start = {**params_start, **Lambda_0}
 
     # number of waveforms to use for resampling
-    N_proposal_samples = int(4.e4)
+    # N_proposal_samples = int(4.e4)
 
     # sample and calulate Ω_GW for spline redshift model
     # we're kinda cheating here by using a "fiducial" or "starting"
