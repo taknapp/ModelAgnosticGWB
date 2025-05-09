@@ -3,6 +3,10 @@
 import sys
 sys.path.append("Transdimensional_Spline_Fitting")
 import numpy as np
+from copy import deepcopy
+from scipy.stats import norm
+import random
+from gwpopulation.utils import xp
 
 import transdimensional_spline_fitting as tsf
 import westley.fitter
@@ -42,14 +46,72 @@ class RedshiftSamplerJAX(tsf.BaseSplineModel):
         self.omgw_func = omgw_func
 
     def ln_likelihood(self, config, heights, knots):
-        params = self.lambda_0
+        params = deepcopy(self.lambda_0)
         params.update({**{f'amplitudes{ii}': heights[ii] for ii in range(heights.size)},
                   **{f'configuration{ii}': config[ii] for ii in range(config.size)},
                   **{f'xvals{ii}': knots[ii] for ii in range(self.available_knots.size)},
                         })
         omgw = self.omgw_func(params)
-        return np.sum(-0.5 * (self.data.data_yvals - omgw)**2 / (2 * self.data.data_errors**2) - 0.5 * np.log(2 * np.pi * self.data.data_errors**2))
+        return np.nansum(-0.5 * (self.data.data_yvals - omgw)**2 / (2 * self.data.data_errors**2) - 0.5 * np.log(2 * np.pi * self.data.data_errors**2))
 
+    def evaluate_interp_model(self, redshift, heights, configuration, knots):
+
+        if self.pop_object.backend=='numpy':
+            if np.sum(configuration)==0:
+                tmp = 0 * xp.zeros(redshift.size)
+            elif np.sum(configuration)==1:
+                tmp = xp.ones(redshift.size) * amplitudes[configuration]
+            else:
+                tmp = interp1d(xvals[configuration],
+                               amplitudes[configuration],
+                               fill_value="extrapolate")(redshift)
+
+        elif self.pop_object.backend=='jax':
+            xvals_new, amplitudes_new = jplsn(knots, heights, configuration)
+            tmp = interpax_interp1d(redshift, xvals_new,
+                           amplitudes_new,
+                           extrap=True, method='linear')
+        return tmp
+        
+    def propose_death_move(self, specific_idx=None):
+        """
+        propose to "turn off" one of the current knots that are turned on.
+        This is the same as the death move in the base model, except this one
+        does not allow you to turn off the endpoints.
+        """
+        if np.sum(self.configuration) == self.min_knots:
+            return (-np.inf, -np.inf, self.configuration, self.current_heights, self.available_knots)
+        else:
+            # pick one to turn off
+            idx_to_remove = np.random.choice(np.where(self.configuration[1:-1])[0]) + 1
+            new_heights = deepcopy(self.current_heights)
+            new_config = deepcopy(self.configuration)
+
+            # turn it off
+            if specific_idx is None:
+                new_config[idx_to_remove] = False
+            else:
+                idx_to_remove = specific_idx
+                new_config[idx_to_remove] = False
+                
+    
+            # Find mean of the Gaussian we would have proposed from
+            height_from_model = self.evaluate_interp_model(self.available_knots[idx_to_remove],
+                                                           self.current_heights, new_config, self.available_knots)
+
+            log_qx = np.log(self.birth_uniform_frac / self.yrange + \
+                              (1 - self.birth_uniform_frac) * norm.pdf(self.current_heights[idx_to_remove],
+                                                                          loc=height_from_model,
+                                                                          scale=self.birth_gauss_scalefac))
+            log_qy = 0
+            
+            log_px = self.get_height_log_prior(self.current_heights[idx_to_remove]) # + self.get_width_log_prior(self.available_knots[idx_to_remove], idx_to_remove)
+            
+            log_py = 0
+
+            new_ll = self.ln_likelihood(new_config, self.current_heights, self.available_knots)
+            
+            return new_ll, (log_py - log_px) + (log_qx - log_qy), new_config, new_heights, self.available_knots
 
 class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
     def __init__(self, omgw_func, pop_object, lambda_0, *args, **kwargs):
