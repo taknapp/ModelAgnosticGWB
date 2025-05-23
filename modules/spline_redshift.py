@@ -60,7 +60,8 @@ class SplineRedshift(gwpopulation.models.redshift._Redshift):
         amplitudes = np.array([parameters[key] for key in parameters if 'amplitude' in key])
         configuration = np.array([parameters[key] for key in parameters if 'configuration' in key])
         xvals = np.array([parameters[key] for key in parameters if 'xval' in key])
-        return interp1d(xvals[configuration], amplitudes[configuration], fill_value="extrapolate")(redshift)
+        tmp = interp1d(xvals[configuration], amplitudes[configuration], fill_value="extrapolate")(redshift)
+        return tmp
 
 def createSplineRedshift(max_knots=10):
     class SplineRedshift(gwpopulation.models.redshift._Redshift):
