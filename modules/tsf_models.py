@@ -120,6 +120,8 @@ class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
         self.lambda_0 = lambda_0
         super(WestleyRedshiftSamplerJAX, self).__init__(*args, **kwargs)
         self.init_args = (self.omgw_func, self.pop_object, self.lambda_0) + self.init_args
+        self.state.knots[0] = 0.
+        self.state.heights[0] = 1.
 
     # def set_base_population_information(self, omgw_func, pop_object, lambda_0):
         # self.pop_object = pop_object
@@ -157,43 +159,102 @@ class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
                            amplitudes_new,
                            extrap=True, method='linear')
         return tmp
+
+    @westley.fitter.proposal(name='change_knot_location', weight=1)
+    def change_knot_location(self):
+        """Change the location of an existing knot."""
+        if self.state.configuration.sum() == 1:
+            return None
+        active_idx = np.where(self.state.configuration[1:])[0] + 1
+        idx_to_change = random.choices(active_idx, k=1)[0]
         
-    def propose_death_move(self, specific_idx=None):
-        """
-        propose to "turn off" one of the current knots that are turned on.
-        This is the same as the death move in the base model, except this one
-        does not allow you to turn off the endpoints.
-        """
-        if np.sum(self.configuration) == self.min_knots:
-            return (-np.inf, -np.inf, self.configuration, self.current_heights, self.available_knots)
-        else:
-            # pick one to turn off
-            idx_to_remove = np.random.choice(np.where(self.configuration[1:-1])[0]) + 1
-            new_heights = deepcopy(self.current_heights)
-            new_config = deepcopy(self.configuration)
+        new_knots = self.state.knots.copy()
+        new_knots[idx_to_change] = (np.random.rand() * 
+            (self.xhighs[idx_to_change] - self.xlows[idx_to_change]) + 
+            self.xlows[idx_to_change])
+        
+        new_ll = self.ln_likelihood(
+            self.state.configuration, self.state.heights, new_knots)
+        
+        return westley.fitter.ProposalResult(
+            new_ll, 0.0, self.state.configuration.copy(),
+            self.state.heights.copy(), new_knots
+        )
 
-            # turn it off
-            if specific_idx is None:
-                new_config[idx_to_remove] = False
-            else:
-                idx_to_remove = specific_idx
-                new_config[idx_to_remove] = False
-                
-    
-            # Find mean of the Gaussian we would have proposed from
-            height_from_model = self.evaluate_interp_model(self.available_knots[idx_to_remove],
-                                                           self.current_heights, new_config, self.available_knots)
+    @westley.fitter.proposal(name='death', weight=1)
+    def death(self):
+        """Death proposal: Remove an existing knot."""
+        active_idx = np.where(self.state.configuration[1:])[0] + 1 # don't kill the first point.
+        if len(active_idx) <= self.min_knots:
+            return None
 
-            log_qx = np.log(self.birth_uniform_frac / self.yrange + \
-                              (1 - self.birth_uniform_frac) * norm.pdf(self.current_heights[idx_to_remove],
-                                                                          loc=height_from_model,
-                                                                          scale=self.birth_gauss_scalefac))
-            log_qy = 0
-            
-            log_px = self.get_height_log_prior(self.current_heights[idx_to_remove]) # + self.get_width_log_prior(self.available_knots[idx_to_remove], idx_to_remove)
-            
-            log_py = 0
+        idx_to_remove = random.choices(active_idx, k=1)[0]
+        new_config = self.state.configuration.copy()
+        new_config[idx_to_remove] = False
 
-            new_ll = self.ln_likelihood(new_config, self.current_heights, self.available_knots)
-            
-            return new_ll, (log_py - log_px) + (log_qx - log_qy), new_config, new_heights, self.available_knots
+        log_ratio = self._calculate_death_ratio(
+            idx_to_remove, 
+            self.state.heights,
+            self.state.knots
+        )
+
+        new_ll = self.ln_likelihood(new_config, self.state.heights, self.state.knots)
+        return westley.fitter.ProposalResult(
+            new_ll, log_ratio, new_config, 
+            self.state.heights.copy(), self.state.knots.copy()
+        )
+
+    @westley.fitter.proposal(name='change_amplitude_prior_draw', weight=1)
+    def change_amplitude_prior_draw(self):
+        """Change amplitude by drawing from the prior."""
+        if self.state.configuration.sum() == 1:
+            return None
+        active_idx = np.where(self.state.configuration[1:])[0] + 1
+        idx_to_change = random.choices(active_idx, k=1)[0]
+
+        new_heights = self.state.heights.copy()
+        new_heights[idx_to_change] = (np.random.rand() * 
+            (self.yhigh - self.ylow) + self.ylow)
+
+        log_py_before = self.get_height_log_prior(self.state.heights[idx_to_change])
+        log_py_after = self.get_height_log_prior(new_heights[idx_to_change])
+        log_ratio = log_py_after - log_py_before
+
+        new_ll = self.ln_likelihood(
+            self.state.configuration, new_heights, self.state.knots)
+
+        return westley.fitter.ProposalResult(
+            new_ll, log_ratio, self.state.configuration.copy(),
+            new_heights, self.state.knots.copy()
+        )
+
+    @westley.fitter.proposal(name='change_amplitude_gaussian', weight=1)
+    def change_amplitude_gaussian(self):
+        """Change amplitude using a Gaussian proposal."""
+        if self.state.configuration.sum() == 1:
+            return None
+        active_idx = np.where(self.state.configuration[1:])[0] + 1
+        idx_to_change = random.choices(active_idx, k=1)[0]
+
+        new_heights = self.state.heights.copy()
+        new_heights[idx_to_change] += norm.rvs(scale=self.birth_gauss_scalefac)
+
+        log_py_before = self.get_height_log_prior(self.state.heights[idx_to_change])
+        log_py_after = self.get_height_log_prior(new_heights[idx_to_change])
+        log_ratio = log_py_after - log_py_before
+
+        new_ll = self.ln_likelihood(
+            self.state.configuration, new_heights, self.state.knots)
+
+        return westley.fitter.ProposalResult(
+            new_ll, log_ratio, self.state.configuration.copy(),
+            new_heights, self.state.knots.copy()
+        )
+
+    # def get_height_log_prior(self, height):
+    #     """Log-uniform prior Calculate the log prior for a given height."""
+        
+    #     if height < self.ylow or height > self.yhigh:
+    #         return -np.inf
+    #     prior = np.log(self.yhigh / (self.ylow + 1e-10)) / height # log uniform prior
+    #     return np.log(prior)
