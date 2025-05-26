@@ -121,6 +121,7 @@ class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
         super(WestleyRedshiftSamplerJAX, self).__init__(*args, **kwargs)
         self.init_args = (self.omgw_func, self.pop_object, self.lambda_0) + self.init_args
         self.state.knots[0] = 0.
+        self.state.knots[-1] = self.xhigh
         self.state.heights[0] = 1.
 
     # def set_base_population_information(self, omgw_func, pop_object, lambda_0):
@@ -163,9 +164,9 @@ class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
     @westley.fitter.proposal(name='change_knot_location', weight=1)
     def change_knot_location(self):
         """Change the location of an existing knot."""
-        if self.state.configuration.sum() == 1:
+        if self.state.configuration.sum() == 2:
             return None
-        active_idx = np.where(self.state.configuration[1:])[0] + 1
+        active_idx = np.where(self.state.configuration[1:-1])[0] + 1
         idx_to_change = random.choices(active_idx, k=1)[0]
         
         new_knots = self.state.knots.copy()
@@ -184,7 +185,7 @@ class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
     @westley.fitter.proposal(name='death', weight=1)
     def death(self):
         """Death proposal: Remove an existing knot."""
-        active_idx = np.where(self.state.configuration[1:])[0] + 1 # don't kill the first point.
+        active_idx = np.where(self.state.configuration[1:-1])[0] + 1 # don't kill the first point.
         if len(active_idx) <= self.min_knots:
             return None
 
@@ -251,10 +252,10 @@ class WestleyRedshiftSamplerJAX(westley.fitter.BaseSplineModel):
             new_heights, self.state.knots.copy()
         )
 
-    # def get_height_log_prior(self, height):
-    #     """Log-uniform prior Calculate the log prior for a given height."""
+    def get_height_log_prior(self, height):
+        """Log-uniform prior Calculate the log prior for a given height."""
         
-    #     if height < self.ylow or height > self.yhigh:
-    #         return -np.inf
-    #     prior = np.log(self.yhigh / (self.ylow + 1e-10)) / height # log uniform prior
-    #     return np.log(prior)
+        if height < self.ylow or height > self.yhigh:
+            return -np.inf
+        prior = 1/ (np.log(self.yhigh / (self.ylow + 1e-10)) * height) # log uniform prior
+        return np.log(prior)
